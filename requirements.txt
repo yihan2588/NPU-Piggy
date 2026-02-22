@@ -1,0 +1,8 @@
+numpy>=1.24
+opencv-python>=4.8
+Pillow>=10.0
+torch>=2.0
+qai-hub-models
+easyocr>=1.7
+tflite-runtime>=2.14; platform_system != "Windows"
+tensorflow>=2.14; platform_system == "Windows"

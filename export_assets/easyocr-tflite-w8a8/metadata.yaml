@@ -1,0 +1,34 @@
+model_files:
+  EasyOCRDetector.tflite:
+    inputs:
+      image:
+        shape: [1, 3, 608, 800]
+        dtype: uint8
+        quantization_parameters:
+          scale: 0.003921568859368563
+          zero_point: 0
+    outputs:
+      results:
+        shape: [1, 304, 400, 2]
+        dtype: uint8
+        quantization_parameters:
+          scale: 0.004232470877468586
+          zero_point: 12
+  EasyOCRRecognizer.tflite:
+    inputs:
+      image:
+        shape: [1, 1, 64, 800]
+        dtype: uint8
+        quantization_parameters:
+          scale: 0.003920610062777996
+          zero_point: 0
+    outputs:
+      output_preds:
+        shape: [1, 199, 97]
+        dtype: uint8
+        quantization_parameters:
+          scale: 0.2560265362262726
+          zero_point: 127
+tool_versions:
+  qairt: 2.42.0.251225135753_193295
+  tflite: 2.17.0
