@@ -1,0 +1,138 @@
+import sys
+import os
+import torch
+import numpy as np
+import tensorflow as tf
+from PIL import Image, ImageDraw
+
+# Ensure the Qualcomm AI Hub Models package is in the path
+REPO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai-hub-models")
+if REPO_DIR not in sys.path:
+    sys.path.insert(0, REPO_DIR)
+
+from qai_hub_models.models.easyocr.app import EasyOCRApp
+
+def prompt(msg):
+    """Print a prompt and read a line — works correctly in Git Bash."""
+    print(msg, end="", flush=True)
+    return sys.stdin.readline().strip()
+
+class TFLiteNPUWrapper:
+    """Wraps a quantized TFLite model to mimic PyTorch for the EasyOCRApp pipeline."""
+    def __init__(self, model_path):
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Missing exported model: {model_path}")
+            
+        # Attempt to load the Qualcomm NPU delegate (QNN). 
+        # If it fails (e.g., driver mismatch), it gracefully falls back to the CPU.
+        try:
+            npu_delegate = tf.lite.experimental.load_delegate('QnnExtDelegate.dll')
+            self.interpreter = tf.lite.Interpreter(model_path=model_path, experimental_delegates=[npu_delegate])
+            print(f"[INFO] Loaded {model_path} with NPU Delegate.")
+        except Exception as e:
+            print(f"[WARNING] NPU delegate failed for {model_path}. Falling back to CPU emulation. ({e})")
+            self.interpreter = tf.lite.Interpreter(model_path=model_path)
+            
+        self.interpreter.allocate_tensors()
+        self.input_details = self.interpreter.get_input_details()
+        self.output_details = self.interpreter.get_output_details()
+
+    def __call__(self, x):
+        # 1. Convert PyTorch tensor (from EasyOCRApp) to Numpy
+        input_data = x.detach().numpy().astype(self.input_details[0]['dtype'])
+        
+        # 2. Run NPU Inference
+        self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
+        self.interpreter.invoke()
+        
+        # 3. Convert Numpy outputs back to PyTorch tensors for the app pipeline
+        outputs = []
+        for out in self.output_details:
+            tensor_out = self.interpreter.get_tensor(out['index'])
+            outputs.append(torch.from_numpy(tensor_out))
+            
+        return outputs[0] if len(outputs) == 1 else tuple(outputs)
+
+def main():
+    print("=== EasyOCR NPU Inference Engine ===", flush=True)
+    print("Initializing NPU delegates and loading TFLite quantized models...")
+
+    # --- 1. Load the exported W8A8 NPU models ---
+    try:
+        # Ensure these match the exact filenames you downloaded from the AI Hub export
+        detector_npu = TFLiteNPUWrapper("EasyOCRDetector_quantized.tflite")
+        recognizer_npu = TFLiteNPUWrapper("EasyOCRRecognizer_quantized.tflite")
+    except Exception as e:
+        print(f"[FATAL ERROR] {e}")
+        return
+
+    # --- 2. Build the Qualcomm EasyOCR App Pipeline ---
+    app = EasyOCRApp(
+        detector=detector_npu,
+        recognizer=recognizer_npu,
+        detector_img_shape=(608, 800),
+        recognizer_img_shape=(64, 800),
+        lang_list=["en"],
+    )
+    
+    print("\n[SUCCESS] Quantized models loaded to NPU! Ready for rapid inference.\n")
+
+    # --- 3. Continuous Inference Loop ---
+    while True:
+        image_name = prompt("Enter image file name (or type 'quit' to exit): ")
+        
+        if image_name.lower() in ['quit', 'q', 'exit']:
+            print("Shutting down OCR engine...")
+            break
+            
+        if not image_name:
+            continue
+
+        if not os.path.isabs(image_name):
+            image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), image_name)
+        else:
+            image_path = image_name
+
+        if not os.path.exists(image_path):
+            print(f"[ERROR] File not found: {image_path}\n")
+            continue
+
+        print(f"Running NPU OCR on: {image_name}...")
+        try:
+            # Load the original image
+            img_pil = Image.open(image_path).convert("RGB")
+            
+            # --- 4. Run NPU Inference via App Pipeline ---
+            # Note: Because we must use the Qualcomm app pipeline to handle the NPU models,
+            # we cannot directly pass the `width_ths=1.0` parameter used in the pure CPU script.
+            results = app.predict_text_from_image(img_pil)
+
+            if not results:
+                print("No text detected.\n")
+                continue
+
+            print("Predicted texts & confidence:")
+            print("-" * 40)
+            
+            # The EasyOCRApp pipeline automatically draws the bounding boxes for you
+            # and returns the fully annotated image as the first tuple element.
+            for annotated_img, texts, confidences in results:
+                for text, conf in zip(texts, confidences):
+                    print(f"  {text:<30}  {conf:.4f}")
+
+            # --- 5. Save annotated output ---
+            base_name = os.path.splitext(os.path.basename(image_path))[0]
+            output_path = os.path.join(os.path.dirname(image_path), f"{base_name}_output.png")
+            
+            # Extract and save the final annotated image from the pipeline
+            final_annotated_img, _, _ = results[-1]
+            final_annotated_img.save(output_path)
+            
+            print("-" * 40)
+            print(f"Annotated image saved to: {output_path}\n")
+            
+        except Exception as e:
+            print(f"[ERROR] Something went wrong during NPU inference: {e}\n")
+
+if __name__ == "__main__":
+    main()
