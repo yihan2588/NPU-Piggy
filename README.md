@@ -38,3 +38,6 @@ Our pipeline operates in four main stages, keeping privacy intact at every step:
 * **AI/ML Models**: Mistral 7B (via Ollama), EasyOCR
 * **Runtime**: ONNX Runtime
 * **Hardware**: Qualcomm NPU, CPU
+
+## 📄 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
